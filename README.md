@@ -1,2 +1,2 @@
 # CampusBazaar
-Customer Platform for Selling Vegetables inside Campus
+Customer Platform for Selling food items inside Campus
