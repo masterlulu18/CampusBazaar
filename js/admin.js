@@ -3,6 +3,7 @@ function showAdminTab(tab) {
   document.getElementById('admin-orders').style.display = tab === 'orders' ? 'block' : 'none';
   document.getElementById('admin-products').style.display = tab === 'products' ? 'block' : 'none';
   document.getElementById('admin-settings').style.display = tab === 'settings' ? 'block' : 'none';
+  document.getElementById('admin-reports').style.display = tab === 'reports' ? 'block' : 'none';
   document.querySelectorAll('.admin-tab').forEach(t => t.classList.remove('active'));
   event.target.classList.add('active');
   if (tab === 'products') loadAdminProducts();
@@ -232,3 +233,126 @@ async function saveCutoffTime() {
   }
   loadAdminOrders();
 })();
+
+async function fetchPendingOrders() {
+  const { data: orders, error } = await supabaseClient
+    .from('orders')
+    .select(`*, order_items (quantity, products (name, unit))`)
+    .eq('status', 'pending')
+    .order('created_at', { ascending: true });
+
+  if (error || !orders) return [];
+  return orders;
+}
+
+async function generatePurchaseReport() {
+  const orders = await fetchPendingOrders();
+  const output = document.getElementById('report-output');
+
+  if (!orders.length) {
+    output.innerHTML = '<p style="margin-top:16px;">No pending orders.</p>';
+    return;
+  }
+
+  const totals = {};
+  orders.forEach(order => {
+    order.order_items.forEach(item => {
+      const key = `${item.products.name} (${item.products.unit})`;
+      totals[key] = (totals[key] || 0) + item.quantity;
+    });
+  });
+
+  const date = new Date().toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' });
+
+  output.innerHTML = `
+    <div style="margin-top:24px; font-family:sans-serif;">
+      <h3>Purchase Report — ${date}</h3>
+      <p>Total pending orders: ${orders.length}</p>
+      <table style="width:100%; border-collapse:collapse; margin-top:12px;">
+        <thead>
+          <tr style="background:#2DB234; color:white;">
+            <th style="padding:8px; text-align:left;">Product</th>
+            <th style="padding:8px; text-align:right;">Total Quantity</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${Object.entries(totals).map(([name, qty], i) => `
+            <tr style="background:${i % 2 === 0 ? '#f9f9f9' : 'white'}">
+              <td style="padding:8px;">${name}</td>
+              <td style="padding:8px; text-align:right;">${qty}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+      <br>
+      <button onclick="window.print()" style="padding:8px 16px; background:#F5D000; border:none; cursor:pointer; font-weight:bold;">🖨️ Print / Save as PDF</button>
+    </div>
+  `;
+}
+
+async function generatePackingList() {
+  const orders = await fetchPendingOrders();
+  const output = document.getElementById('report-output');
+
+  if (!orders.length) {
+    output.innerHTML = '<p style="margin-top:16px;">No pending orders.</p>';
+    return;
+  }
+
+  const date = new Date().toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' });
+
+  output.innerHTML = `
+    <div style="margin-top:24px; font-family:sans-serif;">
+      <h3>Packing List — ${date}</h3>
+      ${orders.map((order, i) => `
+        <div style="border:1px solid #ddd; padding:12px; margin-bottom:12px; page-break-inside:avoid;">
+          <strong>#${i + 1} — ${order.customer_name}</strong> | ${order.phone}<br>
+          📍 ${order.address}, ${order.location}
+          <ul style="margin:8px 0;">
+            ${order.order_items.map(item => `
+              <li>${item.products.name} x${item.quantity} (${item.products.unit})</li>
+            `).join('')}
+          </ul>
+        </div>
+      `).join('')}
+      <br>
+      <button onclick="window.print()" style="padding:8px 16px; background:#F5D000; border:none; cursor:pointer; font-weight:bold;">🖨️ Print / Save as PDF</button>
+    </div>
+  `;
+}
+
+// Add new product
+async function addProduct() {
+  const name = document.getElementById('new-product-name').value.trim();
+  const category = document.getElementById('new-product-category').value.trim();
+  const unit = document.getElementById('new-product-unit').value.trim();
+  const price = parseFloat(document.getElementById('new-product-price').value);
+  const msg = document.getElementById('add-product-message');
+
+  if (!name || !category || !unit || isNaN(price) || price <= 0) {
+    msg.style.color = 'red';
+    msg.textContent = 'Please fill in all fields with valid values.';
+    return;
+  }
+
+  const { error } = await supabaseClient
+    .from('products')
+    .insert({ name, category, unit, price, available: true });
+
+  if (error) {
+    msg.style.color = 'red';
+    msg.textContent = 'Error adding product.';
+    return;
+  }
+
+  msg.style.color = 'green';
+  msg.textContent = `${name} added successfully.`;
+
+  // Clear form
+  document.getElementById('new-product-name').value = '';
+  document.getElementById('new-product-category').value = '';
+  document.getElementById('new-product-unit').value = '';
+  document.getElementById('new-product-price').value = '';
+
+  loadAdminProducts();
+}
