@@ -237,12 +237,61 @@ async function saveCutoffTime() {
 async function fetchPendingOrders() {
   const { data: orders, error } = await supabaseClient
     .from('orders')
-    .select(`*, order_items (quantity, price_at_order, products (name, unit))`)
+    .select(`*, order_items (quantity, price_at_order, products (name, unit, category))`)
     .eq('status', 'pending')
     .order('created_at', { ascending: true });
 
   if (error || !orders) return [];
   return orders;
+}
+
+// --- Purchase list helpers -------------------------------------------------
+
+// Fixed category sections from the design handoff, in print order.
+const PR_SECTION_ORDER = ['VEGETABLES', 'FRUITS', 'MEAT & POULTRY', 'DAIRY', 'GROCERY/STAPLES', 'OTHER'];
+const PR_SECTION_MAP = {
+  vegetable: 'VEGETABLES',
+  fruit: 'FRUITS',
+  meat: 'MEAT & POULTRY',
+  poultry: 'MEAT & POULTRY',
+  chicken: 'MEAT & POULTRY',
+  dairy: 'DAIRY',
+  milk: 'DAIRY',
+  grocery: 'GROCERY/STAPLES',
+  staple: 'GROCERY/STAPLES',
+  spice: 'GROCERY/STAPLES',
+  grain: 'GROCERY/STAPLES',
+};
+
+// Map a raw product.category string onto one of the fixed sections.
+function sectionFor(category) {
+  const key = (category || '').trim().toLowerCase().replace(/s$/, '');
+  return PR_SECTION_MAP[key] || 'OTHER';
+}
+
+// kg contained in one ordered unit of a product, or null for count-based
+// units (dozen, piece, bunch, packet, ml, ...). "500g" -> 0.5, "kg" -> 1.
+function unitWeightKg(unit) {
+  const u = (unit || '').toLowerCase().trim();
+  let m = u.match(/(\d+(?:\.\d+)?)\s*kg/);
+  if (m) return parseFloat(m[1]);
+  m = u.match(/(\d+(?:\.\d+)?)\s*g(?:m|ms|ram|rams)?\b/);
+  if (m) return parseFloat(m[1]) / 1000;
+  if (/^(kgs?|kilo|kilogram|per\s*kg)$/.test(u)) return 1;
+  if (/^g(m|ms|ram|rams)?$/.test(u)) return 0.001;
+  return null;
+}
+
+// Trim trailing zeros: 18 -> "18", 0.25 -> "0.25", 1.5 -> "1.5".
+function fmtNum(n) {
+  return Number.isInteger(n) ? String(n) : parseFloat(n.toFixed(2)).toString();
+}
+
+// Volume units (ml / litre) are listed per item but never rolled into a
+// category subtotal.
+function isVolumeUnit(unit) {
+  const u = (unit || '').toLowerCase();
+  return /ml\b/.test(u) || /(^|[\d\s])l$/.test(u) || /lit(re|er)/.test(u) || /\bltr\b/.test(u);
 }
 
 async function generatePurchaseReport() {
@@ -254,38 +303,161 @@ async function generatePurchaseReport() {
     return;
   }
 
-  const totals = {};
-  orders.forEach(order => {
-    order.order_items.forEach(item => {
-      const key = `${item.products.name} (${item.products.unit})`;
-      totals[key] = (totals[key] || 0) + item.quantity;
+  const date = new Date().toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' });
+
+  // Aggregate ordered quantity per product across all pending orders, keyed by
+  // product name, preserving first-seen order (same aggregation as before).
+  const byName = {};
+  const seen = [];
+  orders.forEach(o => {
+    o.order_items.forEach(it => {
+      const p = it.products || {};
+      const name = p.name || 'Unknown';
+      if (!byName[name]) {
+        byName[name] = { name, unit: p.unit || '', category: p.category || '', qty: 0 };
+        seen.push(name);
+      }
+      byName[name].qty += it.quantity;
     });
   });
 
-  const date = new Date().toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' });
+  // Bucket products into sections and compute the "needed" requirement string.
+  const sections = {};
+  seen.forEach(name => {
+    const p = byName[name];
+    const perUnitKg = unitWeightKg(p.unit);
+    const entry = { name };
+    if (perUnitKg != null) {
+      entry.kg = perUnitKg * p.qty;
+      entry.needed = `${fmtNum(entry.kg)} kg`;
+    } else {
+      entry.count = p.qty;
+      entry.unit = (p.unit || 'pc').trim();
+      entry.needed = `${p.qty} ${entry.unit}`.trim();
+    }
+    const sec = sectionFor(p.category);
+    (sections[sec] = sections[sec] || []).push(entry);
+  });
+
+  const GRID = 'grid-template-columns: 26px 1.5fr 100px 80px 70px 90px 100px 40px 70px;';
+
+  const body = PR_SECTION_ORDER.filter(s => sections[s]).map(sec => {
+    const items = sections[sec];
+
+    // Category subtotal: kg sum for weight items, plus each count unit summed.
+    let kgSum = 0;
+    const countSums = {};
+    items.forEach(x => {
+      if (x.kg) kgSum += x.kg;
+      else if (!isVolumeUnit(x.unit)) countSums[x.unit] = (countSums[x.unit] || 0) + x.count;
+    });
+    const parts = [];
+    if (kgSum) parts.push(`${fmtNum(kgSum)} kg`);
+    Object.entries(countSums).forEach(([u, q]) => parts.push(`${fmtNum(q)} ${u}`));
+    const subtotal = parts.join(' + ') || '—';
+
+    const rows = items.map(x => `
+      <div class="pr-row pr-item">
+        <div class="c"><span class="pr-box"></span></div>
+        <div>${x.name}</div>
+        <div class="r pr-need">${x.needed}</div>
+        <div class="r"><span class="pr-blank" style="width:50px;">&nbsp;</span></div>
+        <div class="r"><span class="pr-blank" style="width:44px;">&nbsp;</span></div>
+        <div class="r"><span class="pr-blank" style="width:60px;">&nbsp;</span></div>
+        <div class="r"><span class="pr-blank" style="width:64px;">&nbsp;</span></div>
+        <div class="c"><span class="pr-box"></span></div>
+        <div class="c"><span class="pr-blank" style="width:44px;">&nbsp;</span></div>
+      </div>
+    `).join('');
+
+    return `
+      <div class="pr-catlabel">${sec}</div>
+      ${rows}
+      <div class="pr-row pr-sub">
+        <div></div>
+        <div>Subtotal</div>
+        <div class="r">${subtotal}</div>
+        <div class="r"><span class="pr-blank" style="width:44px;">&nbsp;</span></div>
+        <div></div>
+        <div class="r"><span class="pr-blank" style="width:60px;">&nbsp;</span></div>
+        <div class="r"><span class="pr-blank" style="width:64px;">&nbsp;</span></div>
+        <div></div>
+        <div></div>
+      </div>
+    `;
+  }).join('');
 
   output.innerHTML = `
-    <div style="margin-top:24px; font-family:sans-serif;">
-      <h3>Purchase Report — ${date}</h3>
-      <p>Total pending orders: ${orders.length}</p>
-      <table style="width:100%; border-collapse:collapse; margin-top:12px;">
-        <thead>
-          <tr style="background:#2DB234; color:white;">
-            <th style="padding:8px; text-align:left;">Product</th>
-            <th style="padding:8px; text-align:right;">Total Quantity</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${Object.entries(totals).map(([name, qty], i) => `
-            <tr style="background:${i % 2 === 0 ? '#f9f9f9' : 'white'}">
-              <td style="padding:8px;">${name}</td>
-              <td style="padding:8px; text-align:right;">${qty}</td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table>
-      <br>
-      <button onclick="window.print()" style="padding:8px 16px; background:#F5D000; border:none; cursor:pointer; font-weight:bold;">🖨️ Print / Save as PDF</button>
+    <style>
+      @page { size: A4 portrait; margin: 0.5in; }
+
+      #report-output .pr-sheet {
+        --pr-ink: #333;     --pr-ink: oklch(0.2 0 0);
+        --pr-rule: #e0e0e0; --pr-rule: oklch(0.88 0 0);
+        --pr-mut: #737373;  --pr-mut: oklch(0.45 0 0);
+        --pr-mut2: #666;    --pr-mut2: oklch(0.4 0 0);
+        font-family: Helvetica, Arial, sans-serif;
+        color: var(--pr-ink);
+        font-size: 11px;
+        margin-top: 16px;
+      }
+      #report-output .pr-head {
+        display: flex; justify-content: space-between; align-items: baseline;
+        border-bottom: 2px solid var(--pr-ink); padding-bottom: 6px; margin-bottom: 4px;
+      }
+      #report-output .pr-title { font-size: 18px; font-weight: 700; letter-spacing: 0.02em; }
+      #report-output .pr-meta { font-size: 11px; }
+      #report-output .pr-instr { font-size: 9.5px; color: var(--pr-mut); margin-bottom: 8px; }
+      #report-output .pr-blank { border-bottom: 1px solid #999; display: inline-block; }
+
+      #report-output .pr-row { display: grid; ${GRID} align-items: center; }
+      #report-output .pr-row .c { text-align: center; }
+      #report-output .pr-row .r { text-align: right; }
+      #report-output .pr-hrow { border-bottom: 2px solid var(--pr-ink); font-weight: 700; font-size: 10px; padding: 4px 0; }
+      #report-output .pr-catlabel { font-weight: 700; font-size: 11px; padding: 6px 0 2px; break-after: avoid; }
+      #report-output .pr-item { border-bottom: 1px solid var(--pr-rule); padding: 4px 0; }
+      #report-output .pr-need { font-weight: 600; }
+      #report-output .pr-sub { font-weight: 600; font-size: 10px; color: var(--pr-mut2); padding: 4px 0 2px; }
+      #report-output .pr-box { width: 12px; height: 12px; border: 1.3px solid var(--pr-ink); display: block; margin: 0 auto; }
+      #report-output .pr-summary {
+        display: flex; justify-content: space-between;
+        margin-top: 12px; padding-top: 8px; border-top: 2px solid var(--pr-ink); font-size: 11px;
+      }
+
+      @media print {
+        .shop-header, .admin-tabs, .admin-container h2, #report-output .pr-noprint { display: none !important; }
+        .admin-section { padding: 0 !important; }
+        .admin-container { max-width: none !important; }
+        #report-output .pr-sheet { margin-top: 0; }
+        #report-output .pr-row { break-inside: avoid; }
+      }
+    </style>
+    <div class="pr-sheet">
+      <div class="pr-head">
+        <div class="pr-title">PURCHASE LIST &mdash; ${date}</div>
+        <div class="pr-meta">Orders covered: <strong>${orders.length}</strong></div>
+      </div>
+      <div class="pr-instr">Tick &ldquo;Bought&rdquo; as purchased. On return, admin re-measures into &ldquo;Received&rdquo; and initials each row.</div>
+      <div style="margin-bottom:10px;">
+        <button class="pr-noprint" onclick="window.print()" style="padding:8px 16px; background:#F5D000; border:none; cursor:pointer; font-weight:bold;">🖨️ Print / Save as PDF</button>
+      </div>
+      <div class="pr-row pr-hrow">
+        <div class="c">&#10003;</div>
+        <div>Product</div>
+        <div class="r">Requirement</div>
+        <div class="r">Bought</div>
+        <div class="r">Rate</div>
+        <div class="r">Spent</div>
+        <div class="r">Received</div>
+        <div class="c">&#10003;</div>
+        <div class="c">Init.</div>
+      </div>
+      ${body}
+      <div class="pr-summary">
+        <div>Grand total spent: <span class="pr-blank" style="width:110px;">&nbsp;</span></div>
+        <div>Purchased by: <span class="pr-blank" style="width:140px;">&nbsp;</span></div>
+        <div>Checked by: <span class="pr-blank" style="width:140px;">&nbsp;</span></div>
+      </div>
     </div>
   `;
 }
