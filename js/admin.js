@@ -237,7 +237,7 @@ async function saveCutoffTime() {
 async function fetchPendingOrders() {
   const { data: orders, error } = await supabaseClient
     .from('orders')
-    .select(`*, order_items (quantity, products (name, unit))`)
+    .select(`*, order_items (quantity, price_at_order, products (name, unit))`)
     .eq('status', 'pending')
     .order('created_at', { ascending: true });
 
@@ -290,6 +290,12 @@ async function generatePurchaseReport() {
   `;
 }
 
+// "7 per kg" / "7 kg" -> "7/kg" so the Qty column never wraps.
+function shortQty(qty, unit) {
+  const u = (unit || '').replace(/^per\s+/i, '').trim();
+  return u ? `${qty}/${u}` : `${qty}`;
+}
+
 async function generatePackingList() {
   const orders = await fetchPendingOrders();
   const output = document.getElementById('report-output');
@@ -299,73 +305,135 @@ async function generatePackingList() {
     return;
   }
 
-  const date = new Date().toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' });
+  const cards = orders.map((order, i) => {
+    const total = order.order_items.reduce(
+      (sum, it) => sum + (it.price_at_order || 0) * it.quantity, 0
+    );
 
-  const cards = orders.map((order, i) => `
-    <div class="pl-order">
-      <div class="pl-head">
-        <span class="pl-box pl-box-lg"></span>
-        <span class="pl-num">#${i + 1}</span>
-        <span class="pl-name">${order.customer_name}</span>
-        <span class="pl-phone">${order.phone}</span>
+    const itemRows = order.order_items.map(it => `
+      <div class="pl-row">
+        <div class="pl-check"><span class="pl-box"></span></div>
+        <div>${it.products.name}</div>
+        <div class="pl-qty">${shortQty(it.quantity, it.products.unit)}</div>
+        <div class="pl-rate">${it.price_at_order != null ? '&#8377;' + it.price_at_order : '&mdash;'}</div>
       </div>
-      <div class="pl-addr">${order.address}, ${order.location}</div>
-      <div class="pl-items">
-        ${order.order_items.map(item => `
-          <div class="pl-item">
-            <span class="pl-box"></span>
-            <span class="pl-qty">${item.quantity}&times;</span>
-            <span class="pl-iname">${item.products.name}</span>
-            <span class="pl-unit">${item.products.unit}</span>
+    `).join('');
+
+    return `
+      <div class="order-block">
+        <div class="pl-cardhead">
+          <div>Order #${i + 1}</div>
+          <div>${order.customer_name}</div>
+          <div class="pl-phone">${order.phone}</div>
+        </div>
+        <div class="pl-addr">${order.address}, ${order.location}</div>
+        <div class="pl-table">
+          <div class="pl-row pl-thead">
+            <div class="pl-check">&#10003;</div>
+            <div>Item</div>
+            <div class="pl-qty">Qty</div>
+            <div class="pl-rate">Rate</div>
           </div>
-        `).join('')}
+          ${itemRows}
+        </div>
+        <div class="pl-foot">
+          <div>Items: <strong>${order.order_items.length}</strong> &nbsp; COD: <strong>&#8377;${total}</strong></div>
+          <div>Collected: <span class="pl-blank" style="width:44px;">&nbsp;</span></div>
+          <div>Packed by: <span class="pl-blank" style="width:60px;">&nbsp;</span></div>
+          <div>Notes: <span class="pl-blank" style="width:70px;">&nbsp;</span></div>
+        </div>
       </div>
-    </div>
-  `).join('');
+    `;
+  }).join('');
 
   output.innerHTML = `
     <style>
-      @page { size: A4; margin: 8mm; }
+      @page { size: A4 portrait; margin: 0.5in; }
 
-      #report-output .pl-wrap { font-family: Arial, Helvetica, sans-serif; color: #000; margin-top: 16px; }
-      #report-output .pl-topbar { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
-      #report-output .pl-title { font-size: 13px; font-weight: bold; }
-      #report-output .pl-count { font-size: 11px; color: #333; }
-      #report-output .pl-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; align-items: start; }
-      #report-output .pl-order { border: 1px solid #000; padding: 4px 6px; font-size: 10px; line-height: 1.3; break-inside: avoid; page-break-inside: avoid; }
-      #report-output .pl-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; border-bottom: 1px solid #888; padding-bottom: 2px; margin-bottom: 3px; }
-      #report-output .pl-num { font-weight: bold; }
-      #report-output .pl-name { font-weight: bold; flex: 1 1 auto; }
-      #report-output .pl-phone { flex: 0 0 auto; white-space: nowrap; }
-      #report-output .pl-addr { font-size: 9px; color: #222; margin-bottom: 3px; }
-      #report-output .pl-items { display: flex; flex-direction: column; gap: 1px; }
-      #report-output .pl-item { display: flex; align-items: center; gap: 4px; }
-      #report-output .pl-qty { font-weight: bold; white-space: nowrap; }
-      #report-output .pl-iname { flex: 1 1 auto; }
-      #report-output .pl-unit { color: #555; white-space: nowrap; }
-      #report-output .pl-box { display: inline-block; width: 9px; height: 9px; border: 1px solid #000; flex: none; }
-      #report-output .pl-box-lg { width: 13px; height: 13px; border-width: 1.5px; }
+      #report-output .pl-sheet {
+        --pl-ink: #333;        --pl-ink: oklch(0.2 0 0);
+        --pl-rule: #bfbfbf;    --pl-rule: oklch(0.75 0 0);
+        --pl-rule-lt: #e0e0e0; --pl-rule-lt: oklch(0.88 0 0);
+        --pl-fill: #f0f0f0;    --pl-fill: oklch(0.94 0 0);
+        --pl-muted: #737373;   --pl-muted: oklch(0.45 0 0);
+        width: 100%;
+        border-collapse: collapse;
+        font-family: Helvetica, Arial, sans-serif;
+        color: var(--pl-ink);
+        margin-top: 16px;
+      }
+      #report-output .pl-runhead {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        border-bottom: 2px solid var(--pl-ink);
+        padding-bottom: 6px;
+        margin-bottom: 4px;
+      }
+      #report-output .pl-runhead .pl-title { font-size: 18px; font-weight: 700; letter-spacing: 0.02em; }
+      #report-output .pl-runhead .pl-meta { font-size: 11px; }
+      #report-output .pl-instructions { font-size: 10px; color: var(--pl-muted); margin: 6px 0 10px; }
+      #report-output .pl-blank { border-bottom: 1px solid #999; display: inline-block; }
+
+      #report-output .pl-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+      #report-output .order-block { border: 1px solid var(--pl-ink); margin-bottom: 10px; font-size: 10px; }
+      #report-output .pl-cardhead {
+        background: var(--pl-fill);
+        border-bottom: 1px solid var(--pl-ink);
+        padding: 4px 6px;
+        font-weight: 700;
+      }
+      #report-output .pl-cardhead .pl-phone { font-weight: 400; }
+      #report-output .pl-addr { padding: 4px 6px; border-bottom: 1px solid var(--pl-rule); }
+      #report-output .pl-row {
+        display: grid;
+        grid-template-columns: 20px minmax(0, max-content) max-content max-content;
+        border-bottom: 1px solid var(--pl-rule-lt);
+        align-items: center;
+      }
+      #report-output .pl-row > div { padding: 3px 4px; }
+      #report-output .pl-thead { border-bottom: 1px solid var(--pl-rule); font-weight: 600; }
+      #report-output .pl-check { text-align: center; }
+      #report-output .pl-qty,
+      #report-output .pl-rate { text-align: right; white-space: nowrap; }
+      #report-output .pl-box {
+        width: 11px;
+        height: 11px;
+        border: 1.5px solid var(--pl-ink);
+        display: block;
+        margin: 0 auto;
+      }
+      #report-output .pl-foot { padding: 4px 6px; border-top: 1px solid var(--pl-rule); }
 
       @media print {
         .shop-header, .admin-tabs, .admin-container h2, #report-output .pl-noprint { display: none !important; }
         .admin-section { padding: 0 !important; }
         .admin-container { max-width: none !important; }
-        #report-output .pl-wrap { margin-top: 0; }
-        #report-output .pl-grid { gap: 4px; }
-        #report-output .pl-order { font-size: 9px; padding: 3px 5px; }
-        #report-output .pl-addr { font-size: 8px; }
+        #report-output .pl-sheet { margin-top: 0; }
+        .order-block { break-inside: avoid; }
       }
     </style>
-    <div class="pl-wrap">
-      <div class="pl-topbar">
-        <span class="pl-title">Packing List &mdash; ${date}</span>
-        <span class="pl-count">${orders.length} order${orders.length === 1 ? '' : 's'}</span>
-        <button class="pl-noprint" onclick="window.print()" style="margin-left:auto; padding:8px 16px; background:#F5D000; border:none; cursor:pointer; font-weight:bold;">🖨️ Print / Save as PDF</button>
-      </div>
-      <div class="pl-grid">
-        ${cards}
-      </div>
-    </div>
+    <table class="pl-sheet">
+      <thead>
+        <tr><td>
+          <div class="pl-runhead">
+            <div class="pl-title">CAMPUS BAZAAR &mdash; PACKING CHECKLIST</div>
+            <div class="pl-meta">Date: <span class="pl-blank" style="width:90px;">&nbsp;</span> Shift: <span class="pl-blank" style="width:60px;">&nbsp;</span></div>
+          </div>
+        </td></tr>
+      </thead>
+      <tbody>
+        <tr><td>
+          <div class="pl-instructions">Tick each item as it goes into the bag. Confirm COD amount collected. Sign before handing to rider.</div>
+          <div style="margin-bottom:10px;">
+            <button class="pl-noprint" onclick="window.print()" style="padding:8px 16px; background:#F5D000; border:none; cursor:pointer; font-weight:bold;">🖨️ Print / Save as PDF</button>
+          </div>
+          <div class="pl-grid">
+            ${cards}
+          </div>
+        </td></tr>
+      </tbody>
+    </table>
   `;
 }
 
