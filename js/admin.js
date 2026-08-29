@@ -301,22 +301,70 @@ async function generatePackingList() {
 
   const date = new Date().toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' });
 
+  const cards = orders.map((order, i) => `
+    <div class="pl-order">
+      <div class="pl-head">
+        <span class="pl-box pl-box-lg"></span>
+        <span class="pl-num">#${i + 1}</span>
+        <span class="pl-name">${order.customer_name}</span>
+        <span class="pl-phone">${order.phone}</span>
+      </div>
+      <div class="pl-addr">${order.address}, ${order.location}</div>
+      <div class="pl-items">
+        ${order.order_items.map(item => `
+          <div class="pl-item">
+            <span class="pl-box"></span>
+            <span class="pl-qty">${item.quantity}&times;</span>
+            <span class="pl-iname">${item.products.name}</span>
+            <span class="pl-unit">${item.products.unit}</span>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `).join('');
+
   output.innerHTML = `
-    <div style="margin-top:24px; font-family:sans-serif;">
-      <h3>Packing List — ${date}</h3>
-      ${orders.map((order, i) => `
-        <div style="border:1px solid #ddd; padding:12px; margin-bottom:12px; page-break-inside:avoid;">
-          <strong>#${i + 1} — ${order.customer_name}</strong> | ${order.phone}<br>
-          📍 ${order.address}, ${order.location}
-          <ul style="margin:8px 0;">
-            ${order.order_items.map(item => `
-              <li>${item.products.name} x${item.quantity} (${item.products.unit})</li>
-            `).join('')}
-          </ul>
-        </div>
-      `).join('')}
-      <br>
-      <button onclick="window.print()" style="padding:8px 16px; background:#F5D000; border:none; cursor:pointer; font-weight:bold;">🖨️ Print / Save as PDF</button>
+    <style>
+      @page { size: A4; margin: 8mm; }
+
+      #report-output .pl-wrap { font-family: Arial, Helvetica, sans-serif; color: #000; margin-top: 16px; }
+      #report-output .pl-topbar { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+      #report-output .pl-title { font-size: 13px; font-weight: bold; }
+      #report-output .pl-count { font-size: 11px; color: #333; }
+      #report-output .pl-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; align-items: start; }
+      #report-output .pl-order { border: 1px solid #000; padding: 4px 6px; font-size: 10px; line-height: 1.3; break-inside: avoid; page-break-inside: avoid; }
+      #report-output .pl-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; border-bottom: 1px solid #888; padding-bottom: 2px; margin-bottom: 3px; }
+      #report-output .pl-num { font-weight: bold; }
+      #report-output .pl-name { font-weight: bold; flex: 1 1 auto; }
+      #report-output .pl-phone { flex: 0 0 auto; white-space: nowrap; }
+      #report-output .pl-addr { font-size: 9px; color: #222; margin-bottom: 3px; }
+      #report-output .pl-items { display: flex; flex-direction: column; gap: 1px; }
+      #report-output .pl-item { display: flex; align-items: center; gap: 4px; }
+      #report-output .pl-qty { font-weight: bold; white-space: nowrap; }
+      #report-output .pl-iname { flex: 1 1 auto; }
+      #report-output .pl-unit { color: #555; white-space: nowrap; }
+      #report-output .pl-box { display: inline-block; width: 9px; height: 9px; border: 1px solid #000; flex: none; }
+      #report-output .pl-box-lg { width: 13px; height: 13px; border-width: 1.5px; }
+
+      @media print {
+        .shop-header, .admin-tabs, .admin-container h2, #report-output .pl-noprint { display: none !important; }
+        .admin-section { padding: 0 !important; }
+        .admin-container { max-width: none !important; }
+        #report-output .pl-wrap { margin-top: 0; }
+        #report-output .pl-grid { gap: 4px; }
+        #report-output .pl-order { font-size: 9px; padding: 3px 5px; }
+        #report-output .pl-addr { font-size: 8px; }
+      }
+    </style>
+    <div class="pl-wrap">
+      <div class="pl-topbar">
+        <span class="pl-title">Packing List &mdash; ${date}</span>
+        <span class="pl-count">${orders.length} order${orders.length === 1 ? '' : 's'}</span>
+        <button class="pl-noprint" onclick="window.print()" style="margin-left:auto; padding:8px 16px; background:#F5D000; border:none; cursor:pointer; font-weight:bold;">🖨️ Print / Save as PDF</button>
+      </div>
+      <div class="pl-grid">
+        ${cards}
+      </div>
     </div>
   `;
 }
