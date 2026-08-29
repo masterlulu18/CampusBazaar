@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Campus Bazaar - My Orders</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body class="shop-body">
+
+  <header class="shop-header">
+    <div class="header-left">
+      <button class="back-btn" onclick="window.location.href='shop.html'">← Back</button>
+    </div>
+    <h1 style="color:#FFD600">My Orders</h1>
+    <div></div>
+  </header>
+
+  <div class="orders-container">
+    <div id="orders-list">
+      <p class="loading">Loading your orders...</p>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="js/supabase.js"></script>
+  <script src="js/orders.js"></script>
+</body>
+</html>

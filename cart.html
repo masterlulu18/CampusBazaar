@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Campus Bazaar - Cart</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body class="shop-body">
+
+  <header class="shop-header">
+    <div class="header-left">
+      <button class="back-btn" onclick="window.location.href='shop.html'">← Back</button>
+    </div>
+    <h1 style="color:#FFD600">Your Cart</h1>
+    <div></div>
+  </header>
+
+  <div class="cart-container">
+    <div id="cart-items"></div>
+
+    <div id="cart-summary" style="display:none">
+      <div class="summary-box">
+        <h3>Order Summary</h3>
+        <p>Total: <strong id="cart-total">₹0</strong></p>
+      </div>
+
+      <div class="checkout-form">
+        <h3>Delivery Details</h3>
+        <input type="text" id="cust-name" placeholder="Your Name" />
+        <input type="tel" id="cust-phone" placeholder="Phone Number" />
+        <input type="text" id="cust-address" placeholder="Delivery Address" />
+        <input type="text" id="cust-location" placeholder="Location / Landmark" />
+        <p class="market-notice">⚠️ Final delivery subject to market availability.</p>
+        <button class="btn-primary" onclick="placeOrder()">Place Order</button>
+        <p id="order-message" class="message"></p>
+      </div>
+    </div>
+
+    <div id="empty-cart" style="display:none">
+      <p class="loading">Your cart is empty.</p>
+      <button class="btn-primary" style="width:auto;margin:0 auto;display:block" 
+        onclick="window.location.href='shop.html'">Continue Shopping</button>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="js/supabase.js"></script>
+  <script src="js/cart.js"></script>
+</body>
+</html>

@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Campus Bazaar - Shop</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body class="shop-body">
+
+  <!-- Header -->
+  <header class="shop-header">
+    <div class="header-left">
+      <h1>Campus Bazaar</h1>
+    </div>
+    <div class="header-right">
+      <button class="cart-btn" onclick="window.location.href='cart.html'">
+        🛒 Cart <span id="cart-count">0</span>
+      </button>
+      <button class="logout-btn" onclick="logoutUser()">Logout</button>
+    </div>
+  </header>
+
+  <div id="shop-closed-banner" style="display:none; background:#e74c3c; color:white; text-align:center; padding:12px; font-weight:bold;">
+  ⛔ Orders are closed for today. Please come back tomorrow morning.
+  </div>
+
+  <!-- Category Tabs -->
+  <div class="category-tabs">
+    <button class="cat-tab active" onclick="filterCategory('All')">All</button>
+    <button class="cat-tab" onclick="filterCategory('Vegetable')">Vegetables</button>
+    <button class="cat-tab" onclick="filterCategory('Fruit')">Fruits</button>
+    <button class="cat-tab" onclick="filterCategory('Meat')">Meat</button>
+    <button class="cat-tab" onclick="filterCategory('Dairy')">Dairy</button>
+    <button class="cat-tab" onclick="filterCategory('Seafood')">Seafood</button>
+    <button class="cat-tab" onclick="filterCategory('Spice')">Spices</button>
+    <button class="cat-tab" onclick="filterCategory('Herb')">Herbs</button>
+  </div>
+
+  <!-- Products Grid -->
+  <div class="products-grid" id="products-grid">
+    <p class="loading">Loading products...</p>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="js/supabase.js"></script>
+  <script src="js/shop.js"></script>
+</body>
+</html>

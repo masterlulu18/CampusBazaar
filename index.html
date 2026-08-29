@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Campus Bazaar</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+  <div class="auth-container">
+    <div class="logo-section">
+      <img src="images/logo.png" alt="Campus Bazaar" class="logo" onerror="this.style.display='none'">
+      <h1>Campus Bazaar</h1>
+      <p>Your Campus Store</p>
+    </div>
+
+    <div class="auth-box">
+      <div class="tabs">
+        <button class="tab active" onclick="showTab('login')">Login</button>
+        <button class="tab" onclick="showTab('signup')">Sign Up</button>
+      </div>
+
+      <!-- Login Form -->
+      <div id="login" class="form-section">
+        <input type="email" id="login-email" placeholder="Email" />
+        <input type="password" id="login-password" placeholder="Password" />
+        <button class="btn-primary" onclick="loginUser()">Login</button>
+      </div>
+
+      <!-- Signup Form -->
+      <div id="signup" class="form-section" style="display:none">
+        <input type="email" id="signup-email" placeholder="Email" />
+        <input type="password" id="signup-password" placeholder="Password" />
+        <button class="btn-primary" onclick="signupUser()">Create Account</button>
+      </div>
+
+      <div class="divider">or</div>
+      <button class="btn-guest" onclick="continueAsGuest()">Continue as Guest</button>
+      <p id="auth-message" class="message"></p>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="js/supabase.js"></script>
+  <script src="js/auth.js"></script>
+</body>
+</html>
