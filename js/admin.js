@@ -38,7 +38,7 @@ async function loadAdminOrders() {
           <div>
             <p class="order-date">${order.customer_name} — ${order.phone}</p>
             <p class="order-address">📍 ${order.address}, ${order.location}</p>
-            <p class="order-address">${new Date(order.created_at).toLocaleString('en-IN')}</p>
+            <p class="order-address">${new Date(order.created_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}</p>
           </div>
           <span class="order-status ${order.status}">${order.status}</span>
         </div>
