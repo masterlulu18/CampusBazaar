@@ -1,6 +1,8 @@
 let allProducts = [];
 let cart = JSON.parse(localStorage.getItem('cart')) || [];
 let isShopOpen = true;
+let activeCategory = 'All';
+let searchQuery = '';
 
 // Check if shop is open based on shop_open flag and cutoff time
 async function checkShopStatus() {
@@ -43,8 +45,14 @@ async function loadProducts() {
   }
 
   allProducts = data;
-  renderProducts(data);
+  applyFilters();
   updateCartCount();
+}
+
+// Normalize a category label so singular/plural and casing differences still
+// match (e.g. a "Vegetables" value from the DB matches the "Vegetable" tab).
+function normCat(c) {
+  return (c || '').trim().toLowerCase().replace(/s$/, '');
 }
 
 // Render product cards
@@ -52,7 +60,10 @@ function renderProducts(products) {
   const grid = document.getElementById('products-grid');
 
   if (products.length === 0) {
-    grid.innerHTML = '<p class="loading">No products found.</p>';
+    const msg = searchQuery.trim()
+      ? 'No products match your search.'
+      : 'No products found.';
+    grid.innerHTML = `<p class="loading">${msg}</p>`;
     return;
   }
 
@@ -71,16 +82,31 @@ function renderProducts(products) {
   `).join('');
 }
 
+// Apply the active category + live search query, then re-render.
+function applyFilters() {
+  let list = allProducts;
+
+  if (activeCategory !== 'All') {
+    list = list.filter(p => normCat(p.category) === normCat(activeCategory));
+  }
+
+  const q = searchQuery.trim().toLowerCase();
+  if (q) {
+    list = list.filter(p =>
+      (p.name || '').toLowerCase().includes(q) ||
+      (p.category || '').toLowerCase().includes(q)
+    );
+  }
+
+  renderProducts(list);
+}
+
 // Filter by category
 function filterCategory(category) {
   document.querySelectorAll('.cat-tab').forEach(t => t.classList.remove('active'));
   event.target.classList.add('active');
-
-  if (category === 'All') {
-    renderProducts(allProducts);
-  } else {
-    renderProducts(allProducts.filter(p => p.category === category));
-  }
+  activeCategory = category;
+  applyFilters();
 }
 
 // Add to cart
@@ -124,6 +150,15 @@ function clearCartIfStale() {
   if (cart.length > 0) {
     localStorage.setItem('cartDate', today);
   }
+}
+
+// Live product search
+const searchInput = document.getElementById('product-search');
+if (searchInput) {
+  searchInput.addEventListener('input', e => {
+    searchQuery = e.target.value;
+    applyFilters();
+  });
 }
 
 // Run on page load
