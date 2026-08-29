@@ -10,7 +10,20 @@ function showAdminTab(tab) {
   if (tab === 'settings') loadSettings();
 }
 
-// Load all orders
+// ===== Incoming Orders: compact, filterable, expandable table =====
+
+let adminOrders = [];
+const aoState = { search: '', status: 'all', from: '', to: '', expanded: new Set() };
+let aoPrintOnly = null; // when set, only this order id prints
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
+
+// Load all orders (real Supabase query), then (re)build the table UI while
+// keeping the current search / status / date filters and expanded rows.
 async function loadAdminOrders() {
   const { data: orders, error } = await supabaseClient
     .from('orders')
@@ -26,41 +39,13 @@ async function loadAdminOrders() {
 
   const list = document.getElementById('admin-orders-list');
 
-  if (error || !orders || !orders.length) {
-    list.innerHTML = '<p class="loading">No orders yet.</p>';
+  if (error) {
+    list.innerHTML = '<p class="loading">Error loading orders.</p>';
     return;
   }
 
-  list.innerHTML = orders.map(order => {
-    const total = order.order_items.reduce((sum, item) => sum + (item.price_at_order * item.quantity), 0);
-    return `
-      <div class="order-card">
-        <div class="order-header">
-          <div>
-            <p class="order-date">${order.customer_name} — ${order.phone}</p>
-            <p class="order-address">📍 ${order.address}, ${order.location}</p>
-            <p class="order-address">${new Date(order.created_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}</p>
-          </div>
-          <span class="order-status ${order.status}">${order.status}</span>
-        </div>
-        <div class="order-items">
-          ${order.order_items.map(item => `
-            <div class="order-item-row">
-              <span>${item.products.name}</span>
-              <span>x${item.quantity}</span>
-              <span>₹${item.price_at_order * item.quantity}</span>
-            </div>
-          `).join('')}
-        </div>
-        <div class="order-footer">
-          <strong>Total: ₹${total}</strong>
-          ${order.status === 'pending' ? `
-            <button onclick="markDisposed('${order.id}')" class="btn-dispose">Mark as Disposed</button>
-          ` : ''}
-        </div>
-      </div>
-    `;
-  }).join('');
+  adminOrders = orders || [];
+  renderAdminOrdersShell();
 }
 
 // Mark order as disposed
@@ -77,38 +62,417 @@ async function markDisposed(orderId) {
   loadAdminOrders();
 }
 
-// Load products
+// Toolbar + status chips + table scaffold. Rebuilt on every load; the row
+// list itself is re-rendered separately so the search box keeps focus.
+function renderAdminOrdersShell() {
+  const list = document.getElementById('admin-orders-list');
+  const chips = ['all', 'pending', 'disposed', 'cancelled'];
+
+  list.innerHTML = `
+    <div class="ao-head oa-noprint">
+      <h2>Incoming Orders</h2>
+      <div class="ao-controls">
+        <input type="text" id="ao-search" class="ao-search" placeholder="Search by name, phone, address…" autocomplete="off" />
+        <div class="ao-daterange">
+          <span>From</span>
+          <input type="date" id="ao-from" />
+          <span>To</span>
+          <input type="date" id="ao-to" />
+        </div>
+        <button id="ao-print" class="ao-printbtn" type="button">🖨️ Print list</button>
+      </div>
+    </div>
+
+    <div class="ao-chips oa-noprint">
+      ${chips.map(s => `
+        <button type="button" class="ao-chip${s === aoState.status ? ' active' : ''}" data-status="${s}">
+          ${s === 'all' ? 'All' : s[0].toUpperCase() + s.slice(1)}
+        </button>
+      `).join('')}
+    </div>
+
+    <div class="ao-table">
+      <div class="ao-scroll">
+        <div class="ao-thead">
+          <div></div>
+          <div>Customer</div>
+          <div>Address</div>
+          <div>Time</div>
+          <div class="ao-c">Items</div>
+          <div class="ao-r">Total</div>
+          <div>Status</div>
+          <div>Actions</div>
+        </div>
+        <div id="ao-rows"></div>
+      </div>
+    </div>
+  `;
+
+  list.querySelector('#ao-search').value = aoState.search;
+  list.querySelector('#ao-from').value = aoState.from;
+  list.querySelector('#ao-to').value = aoState.to;
+
+  list.querySelector('#ao-search').addEventListener('input', e => {
+    aoState.search = e.target.value;
+    renderOrderRows();
+  });
+  list.querySelector('#ao-from').addEventListener('input', e => {
+    aoState.from = e.target.value;
+    renderOrderRows();
+  });
+  list.querySelector('#ao-to').addEventListener('input', e => {
+    aoState.to = e.target.value;
+    renderOrderRows();
+  });
+  list.querySelector('#ao-print').addEventListener('click', onPrintOrdersList);
+  list.querySelectorAll('.ao-chip').forEach(btn => {
+    btn.addEventListener('click', () => {
+      aoState.status = btn.dataset.status;
+      list.querySelectorAll('.ao-chip').forEach(b => b.classList.toggle('active', b === btn));
+      renderOrderRows();
+    });
+  });
+
+  renderOrderRows();
+}
+
+// Apply the three filters (search AND status AND date range).
+function getFilteredOrders() {
+  const q = aoState.search.trim().toLowerCase();
+  const from = aoState.from ? new Date(aoState.from + 'T00:00:00') : null;
+  const to = aoState.to ? new Date(aoState.to + 'T23:59:59') : null;
+
+  return adminOrders.filter(o => {
+    const status = o.status || 'pending';
+    if (aoState.status !== 'all' && status !== aoState.status) return false;
+
+    const d = new Date(o.created_at);
+    if (from && d < from) return false;
+    if (to && d > to) return false;
+
+    if (!q) return true;
+    const hay = `${o.customer_name || ''} ${o.phone || ''} ${o.address || ''} ${o.location || ''}`.toLowerCase();
+    return hay.includes(q);
+  });
+}
+
+function renderOrderRows() {
+  const rowsEl = document.getElementById('ao-rows');
+  if (!rowsEl) return;
+
+  const filtered = getFilteredOrders();
+
+  if (!filtered.length) {
+    const msg = adminOrders.length ? 'No orders match your search.' : 'No orders yet.';
+    rowsEl.innerHTML = `<div class="ao-empty">${msg}</div>`;
+    return;
+  }
+
+  rowsEl.innerHTML = filtered.map(renderOrderRow).join('');
+
+  rowsEl.querySelectorAll('.ao-row').forEach(row => {
+    row.addEventListener('click', e => {
+      if (e.target.closest('.ao-actions')) return;
+      const id = row.dataset.id;
+      if (aoState.expanded.has(id)) aoState.expanded.delete(id);
+      else aoState.expanded.add(id);
+      renderOrderRows();
+    });
+  });
+  rowsEl.querySelectorAll('[data-act]').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const { act, id } = btn.dataset;
+      if (act === 'dispose') markDisposed(id);
+      else if (act === 'print') printSingleOrder(id);
+      else if (act === 'edit') alert('Editing orders is not available yet.');
+    });
+  });
+}
+
+function renderOrderRow(o) {
+  const items = (o.order_items || []).map(it => ({
+    name: it.products ? it.products.name : 'Item',
+    qty: it.quantity,
+    price: (it.price_at_order || 0) * it.quantity,
+  }));
+  const total = items.reduce((s, it) => s + it.price, 0);
+  const status = o.status || 'pending';
+  const time = new Date(o.created_at).toLocaleString('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    day: 'numeric', month: 'numeric', year: 'numeric',
+    hour: 'numeric', minute: '2-digit', hour12: true,
+  });
+  const expanded = aoState.expanded.has(o.id);
+  const address = [o.address, o.location].filter(Boolean).join(', ');
+  const dial = (o.phone || '').replace(/[^\d+]/g, '');
+  const hide = aoPrintOnly && aoPrintOnly !== o.id ? ' ao-print-hide' : '';
+
+  return `
+    <div class="ao-order${hide}">
+      <div class="ao-row${expanded ? ' expanded' : ''}" data-id="${esc(o.id)}">
+        <div class="ao-chev">▶</div>
+        <div>
+          <div class="ao-name">${esc(o.customer_name || '—')}</div>
+          <div class="ao-phone">${esc(o.phone || '')}</div>
+        </div>
+        <div class="ao-addr">${esc(address)}</div>
+        <div class="ao-time">${time}</div>
+        <div class="ao-items">${items.length}</div>
+        <div class="ao-total">₹${total}</div>
+        <div><span class="order-status ${status}">${status}</span></div>
+        <div class="ao-actions oa-noprint">
+          <a class="ao-icon" title="Call" href="tel:${dial}">📞</a>
+          <button type="button" class="ao-icon" title="Print" data-act="print" data-id="${esc(o.id)}">🖨️</button>
+          <button type="button" class="ao-icon" title="Edit" data-act="edit" data-id="${esc(o.id)}">✎</button>
+          ${status === 'pending'
+            ? `<button type="button" class="ao-dispose" data-act="dispose" data-id="${esc(o.id)}">Dispose</button>`
+            : ''}
+        </div>
+      </div>
+      ${expanded ? `
+        <div class="ao-panel">
+          ${items.map(it => `
+            <div class="ao-panel-row">
+              <span>${esc(it.name)}</span>
+              <span class="ao-panel-qty">×${it.qty}</span>
+              <span>₹${it.price}</span>
+            </div>
+          `).join('')}
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+// Print list: expand every currently-filtered order, then print.
+function onPrintOrdersList() {
+  aoPrintOnly = null;
+  getFilteredOrders().forEach(o => aoState.expanded.add(o.id));
+  renderOrderRows();
+  setTimeout(() => window.print(), 50);
+}
+
+// Print one order: temporarily hide the others, print, then restore.
+function printSingleOrder(id) {
+  aoState.expanded.add(id);
+  aoPrintOnly = id;
+  renderOrderRows();
+  setTimeout(() => {
+    window.print();
+    aoPrintOnly = null;
+    renderOrderRows();
+  }, 50);
+}
+
+// ===== Manage Products: category-grouped table, search, inline price edit =====
+
+let adminProducts = [];
+let apSearch = '';
+
+// Load products, (re)build the tab UI, keep the search box and its focus.
 async function loadAdminProducts() {
   const { data: products, error } = await supabaseClient
     .from('products')
     .select('*')
-    .order('category');
+    .order('category')
+    .order('name');
 
   const list = document.getElementById('admin-products-list');
 
-  if (error || !products.length) {
-    list.innerHTML = '<p class="loading">No products found.</p>';
+  if (error) {
+    list.innerHTML = '<p class="loading">Error loading products.</p>';
     return;
   }
 
-  list.innerHTML = products.map(p => `
-    <div class="product-admin-card">
-      <div>
-        <strong>${p.name}</strong> (${p.category})
-        <p>${p.unit} — ${p.available ? 'Available' : 'Unavailable'}</p>
-        <div style="display:flex; align-items:center; gap:8px; margin-top:4px;">
-          <span>₹</span>
-          <input type="number" id="price-${p.id}" value="${p.price}" min="0" style="width:80px; padding:4px;">
-          <button onclick="updatePrice('${p.id}')">Save Price</button>
-        </div>
+  adminProducts = products || [];
+
+  if (!document.getElementById('ap-search')) {
+    renderProductsShell();
+  }
+  refreshCategoryOptions();
+  renderProductRows();
+}
+
+// One-time scaffold: single-row Add form + search + table header.
+function renderProductsShell() {
+  const list = document.getElementById('admin-products-list');
+
+  list.innerHTML = `
+    <div class="ap-form">
+      <div class="ap-form-row">
+        <input type="text" id="new-product-name" class="ap-in ap-in-name" placeholder="Product name" autocomplete="off" />
+        <select id="new-product-category" class="ap-in ap-in-cat" onchange="onNewCategoryMode()">
+          <option value="" disabled selected>Category</option>
+          <option value="__add_new__">+ Add new category…</option>
+        </select>
+        <input type="text" id="new-product-category-new" class="ap-in ap-in-cat ap-in-newcat" placeholder="New category name" autocomplete="off" hidden />
+        <input type="text" id="new-product-unit" class="ap-in ap-in-unit" placeholder="Unit (kg, dozen…)" autocomplete="off" />
+        <input type="number" id="new-product-price" class="ap-in ap-in-price" placeholder="₹" min="0" />
+        <button type="button" class="ap-add-btn" onclick="addProduct()">Add Product</button>
       </div>
-      <div>
-        <button onclick="toggleAvailability('${p.id}', ${p.available})">
-          ${p.available ? 'Mark Unavailable' : 'Mark Available'}
-        </button>
+      <p id="add-product-message" class="message ap-msg"></p>
+    </div>
+
+    <div class="ap-searchwrap">
+      <input type="text" id="ap-search" class="ap-search" placeholder="Search products…" autocomplete="off"
+        oninput="filterAdminProducts(this.value)" />
+    </div>
+
+    <div class="ap-table">
+      <div class="ap-scroll">
+        <div class="ap-thead">
+          <div>Product</div>
+          <div>Unit</div>
+          <div>Price</div>
+          <div>Status</div>
+          <div>Action</div>
+          <div></div>
+        </div>
+        <div id="ap-rows"></div>
       </div>
     </div>
+  `;
+
+  document.getElementById('ap-search').value = apSearch;
+}
+
+// Rebuild the category <select> from the distinct categories currently in the
+// products table, preserving the active selection.
+function refreshCategoryOptions() {
+  const sel = document.getElementById('new-product-category');
+  if (!sel) return;
+
+  const current = sel.value;
+  const cats = [...new Set(adminProducts.map(p => (p.category || '').trim()).filter(Boolean))];
+  const placeholderSelected = current === '' || current === '__add_new__';
+
+  sel.innerHTML =
+    `<option value="" disabled${placeholderSelected ? ' selected' : ''}>Category</option>` +
+    cats.map(c => `<option value="${esc(c)}"${c === current ? ' selected' : ''}>${esc(c)}</option>`).join('') +
+    `<option value="__add_new__">+ Add new category…</option>`;
+}
+
+// "+ Add new category…" -> reveal a text input styled to signal the new mode.
+function onNewCategoryMode() {
+  const sel = document.getElementById('new-product-category');
+  const newInput = document.getElementById('new-product-category-new');
+  const adding = sel.value === '__add_new__';
+  newInput.hidden = !adding;
+  if (adding) {
+    newInput.value = '';
+    newInput.focus();
+  }
+}
+
+// Effective category string for addProduct(): the new-category input when it is
+// showing, otherwise the <select> value.
+function getNewCategory() {
+  const newInput = document.getElementById('new-product-category-new');
+  if (newInput && !newInput.hidden) return newInput.value.trim();
+  const sel = document.getElementById('new-product-category');
+  const v = sel ? sel.value : '';
+  return v === '__add_new__' ? '' : v.trim();
+}
+
+function filterAdminProducts(value) {
+  apSearch = value;
+  renderProductRows();
+}
+
+// Group the (search-filtered) products by category, in first-seen order.
+function renderProductRows() {
+  const rowsEl = document.getElementById('ap-rows');
+  if (!rowsEl) return;
+
+  const q = apSearch.trim().toLowerCase();
+  const filtered = adminProducts.filter(p => !q || (p.name || '').toLowerCase().includes(q));
+
+  if (!filtered.length) {
+    const msg = adminProducts.length ? 'No products match your search.' : 'No products found.';
+    rowsEl.innerHTML = `<div class="ap-empty">${msg}</div>`;
+    return;
+  }
+
+  const groups = [];
+  const idx = {};
+  filtered.forEach(p => {
+    const raw = (p.category || '').trim();
+    const key = raw || ' uncat';
+    if (idx[key] === undefined) {
+      idx[key] = groups.length;
+      groups.push({ raw, label: raw || 'Uncategorized', items: [] });
+    }
+    groups[idx[key]].items.push(p);
+  });
+
+  rowsEl.innerHTML = groups.map(g => `
+    <div class="ap-cat">
+      <span>${esc(g.label)}</span>
+      <button type="button" class="ap-delcat" data-cat="${esc(g.raw)}"
+        onclick="deleteCategory(this.dataset.cat)">Delete category</button>
+    </div>
+    ${g.items.map(renderProductRow).join('')}
   `).join('');
+}
+
+function renderProductRow(p) {
+  const avail = !!p.available;
+  return `
+    <div class="ap-row${avail ? '' : ' ap-dim'}">
+      <div class="ap-name">${esc(p.name)}</div>
+      <div class="ap-unit">${esc(p.unit || '')}</div>
+      <div class="ap-price">
+        <span class="ap-rupee">₹</span>
+        <input type="number" id="price-${p.id}" class="ap-price-in" value="${p.price}" min="0" />
+        <button type="button" class="ap-save" onclick="updatePrice('${p.id}')">Save</button>
+      </div>
+      <div><span class="ap-status ${avail ? 'ok' : 'no'}">${avail ? 'Available' : 'Unavailable'}</span></div>
+      <div>
+        <button type="button" class="ap-toggle" onclick="toggleAvailability('${p.id}', ${avail})">
+          ${avail ? 'Mark Unavailable' : 'Mark Available'}
+        </button>
+      </div>
+      <div>
+        <button type="button" class="ap-del" title="Delete product"
+          data-id="${p.id}" data-name="${esc(p.name)}"
+          onclick="deleteProduct(this.dataset.id, this.dataset.name)">✕</button>
+      </div>
+    </div>
+  `;
+}
+
+// Delete one product after a native confirm.
+async function deleteProduct(id, name) {
+  if (!window.confirm(`Delete "${name}"? This cannot be undone.`)) return;
+
+  const { error } = await supabaseClient
+    .from('products')
+    .delete()
+    .eq('id', id);
+
+  if (error) {
+    alert('Error deleting product.');
+    return;
+  }
+  loadAdminProducts();
+}
+
+// Delete every product in a category after a native confirm.
+async function deleteCategory(category) {
+  const count = adminProducts.filter(p => (p.category || '').trim() === category).length;
+  if (!window.confirm(`Delete category "${category}" and all ${count} product(s) in it? This cannot be undone.`)) return;
+
+  const { error } = await supabaseClient
+    .from('products')
+    .delete()
+    .eq('category', category);
+
+  if (error) {
+    alert('Error deleting category.');
+    return;
+  }
+  loadAdminProducts();
 }
 
 // Update product price
@@ -612,7 +976,7 @@ async function generatePackingList() {
 // Add new product
 async function addProduct() {
   const name = document.getElementById('new-product-name').value.trim();
-  const category = document.getElementById('new-product-category').value.trim();
+  const category = getNewCategory();
   const unit = document.getElementById('new-product-unit').value.trim();
   const price = parseFloat(document.getElementById('new-product-price').value);
   const msg = document.getElementById('add-product-message');
@@ -638,9 +1002,12 @@ async function addProduct() {
 
   // Clear form
   document.getElementById('new-product-name').value = '';
-  document.getElementById('new-product-category').value = '';
   document.getElementById('new-product-unit').value = '';
   document.getElementById('new-product-price').value = '';
+  const catSel = document.getElementById('new-product-category');
+  const catNew = document.getElementById('new-product-category-new');
+  if (catSel) catSel.value = '';
+  if (catNew) { catNew.value = ''; catNew.hidden = true; }
 
   loadAdminProducts();
 }
